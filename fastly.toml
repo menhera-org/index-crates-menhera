@@ -7,7 +7,7 @@ description = "Minimum-age-gated proxy for index.crates.io"
 language = "rust"
 manifest_version = 3
 name = "index-crates-menhera"
-service_id = ""
+service_id = "MC3rhWNRP5hAfC8jCClHVH"
 
 [local_server]
   [local_server.backends]

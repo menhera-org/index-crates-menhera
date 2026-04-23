@@ -18,7 +18,17 @@ fn main(req: Request) -> Result<Response, Error> {
         "FASTLY_SERVICE_VERSION: {}",
         std::env::var("FASTLY_SERVICE_VERSION").unwrap_or_default()
     );
+    match handle(req) {
+        Ok(resp) => Ok(resp),
+        Err(err) => {
+            eprintln!("handler error: {err:#}");
+            Ok(Response::from_status(StatusCode::BAD_GATEWAY)
+                .with_body_text_plain("upstream error\n"))
+        }
+    }
+}
 
+fn handle(req: Request) -> Result<Response, Error> {
     let method = req.get_method().clone();
     match method {
         Method::GET | Method::HEAD => {}
@@ -34,17 +44,34 @@ fn main(req: Request) -> Result<Response, Error> {
     };
 
     let upstream_url = format!("https://{}/{}", UPSTREAM_HOST, rest);
-    let beresp = Request::new(method.clone(), upstream_url).send(BACKEND)?;
+    let bereq = Request::new(method.clone(), &upstream_url)
+        .with_header(header::ACCEPT_ENCODING, "identity");
+    let beresp = match bereq.send(BACKEND) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("backend send failed for {upstream_url}: {e:#}");
+            return Ok(Response::from_status(StatusCode::BAD_GATEWAY)
+                .with_body_text_plain("upstream fetch failed\n"));
+        }
+    };
 
     let passthrough = method == Method::HEAD
         || beresp.get_status() != StatusCode::OK
         || rest.is_empty()
-        || rest == "config.toml";
+        || rest == "config.toml"
+        || response_is_compressed(&beresp);
     if passthrough {
         return Ok(beresp);
     }
 
     Ok(filter_response(beresp, days))
+}
+
+fn response_is_compressed(resp: &Response) -> bool {
+    match resp.get_header(header::CONTENT_ENCODING).and_then(|v| v.to_str().ok()) {
+        None => false,
+        Some(enc) => !enc.eq_ignore_ascii_case("identity"),
+    }
 }
 
 fn not_found() -> Response {
@@ -70,7 +97,26 @@ fn filter_response(mut beresp: Response, days: u32) -> Response {
         .unwrap_or(0);
     let cutoff = now_secs.saturating_sub(u64::from(days) * SECS_PER_DAY);
 
-    let body = beresp.take_body().into_string();
+    let body_bytes = beresp.take_body().into_bytes();
+    let out = match std::str::from_utf8(&body_bytes) {
+        Ok(body) => filter_body(body, cutoff),
+        Err(e) => {
+            eprintln!("upstream body not UTF-8 ({e}); passing through unfiltered");
+            body_bytes
+        }
+    };
+
+    let mut resp = Response::from_status(StatusCode::OK);
+    for name in ["content-type", "etag", "last-modified", "cache-control"] {
+        if let Some(v) = beresp.get_header(name) {
+            resp.set_header(name, v.clone());
+        }
+    }
+    resp.set_body(out);
+    resp
+}
+
+fn filter_body(body: &str, cutoff: u64) -> Vec<u8> {
     let mut out = Vec::with_capacity(body.len());
     for line in body.split_inclusive('\n') {
         let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
@@ -83,15 +129,7 @@ fn filter_response(mut beresp: Response, days: u32) -> Response {
             _ => out.extend_from_slice(line.as_bytes()),
         }
     }
-
-    let mut resp = Response::from_status(StatusCode::OK);
-    for name in ["content-type", "etag", "last-modified", "cache-control"] {
-        if let Some(v) = beresp.get_header(name) {
-            resp.set_header(name, v.clone());
-        }
-    }
-    resp.set_body(out);
-    resp
+    out
 }
 
 fn line_pubtime_secs(line: &str) -> Option<u64> {
