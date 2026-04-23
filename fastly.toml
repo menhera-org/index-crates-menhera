@@ -1,0 +1,26 @@
+# This file describes a Fastly Compute package. To learn more visit:
+# https://www.fastly.com/documentation/reference/compute/fastly-toml
+
+authors = ["mori@menhera.ad.jp"]
+cloned_from = "https://github.com/fastly/compute-starter-kit-rust-default"
+description = "Minimum-age-gated proxy for index.crates.io"
+language = "rust"
+manifest_version = 3
+name = "index-crates-menhera"
+service_id = ""
+
+[local_server]
+  [local_server.backends]
+    [local_server.backends.index_crates_io]
+      url = "https://index.crates.io"
+      override_host = "index.crates.io"
+
+[setup]
+  [setup.backends]
+    [setup.backends.index_crates_io]
+      address = "index.crates.io"
+      port = 443
+      description = "Cargo sparse-index upstream"
+
+[scripts]
+  build = "cargo build --profile release"
