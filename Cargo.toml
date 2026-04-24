@@ -5,7 +5,11 @@ authors = []
 edition = "2021"
 # Remove this line if you want to be able to publish this crate on crates.io.
 # Otherwise, `publish = false` prevents an accidental `cargo publish` from revealing private source.
-publish = false
+publish = true
+
+description = "Codes powering index.crates.menhera.org"
+author = "metastable-void"
+license = "Apache-2.0 OR MPL-2.0"
 
 [profile.release]
 debug = 1
