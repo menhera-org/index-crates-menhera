@@ -1,8 +1,9 @@
 //! index.crates.menhera.org — a minimum-age-gated proxy for the Cargo sparse-index.
 //!
-//! `/Nd/<path>` (with N in 1..=30) proxies `https://index.crates.io/<path>` and
-//! strips any version lines whose `pubtime` is newer than N days ago. `config.toml`
-//! and non-200 responses are passed through unchanged.
+//! `/Nd/<path>` (with N in 0..=30) proxies `https://index.crates.io/<path>` and
+//! strips any version lines whose `pubtime` is newer than N days ago. `N = 0`
+//! disables filtering entirely (pure pass-through). `config.toml` and non-200
+//! responses are passed through unchanged.
 
 use fastly::http::{header, Method, StatusCode};
 use fastly::{Error, Request, Response};
@@ -55,7 +56,8 @@ fn handle(req: Request) -> Result<Response, Error> {
         }
     };
 
-    let passthrough = method == Method::HEAD
+    let passthrough = days == 0
+        || method == Method::HEAD
         || beresp.get_status() != StatusCode::OK
         || rest.is_empty()
         || rest == "config.toml"
@@ -78,13 +80,14 @@ fn not_found() -> Response {
     Response::from_status(StatusCode::NOT_FOUND).with_body_text_plain("Not Found\n")
 }
 
-/// Match `/<N>d/<rest>` with 1 <= N <= 30. Returns (N, rest-without-leading-slash).
+/// Match `/<N>d/<rest>` with 0 <= N <= 30. Returns (N, rest-without-leading-slash).
+/// `N = 0` means pass-through (no filtering).
 fn parse_prefix(path: &str) -> Option<(u32, &str)> {
     let rest = path.strip_prefix('/')?;
     let (prefix, tail) = rest.split_once('/')?;
     let days_str = prefix.strip_suffix('d')?;
     let days: u32 = days_str.parse().ok()?;
-    if !(1..=30).contains(&days) {
+    if days > 30 {
         return None;
     }
     Some((days, tail))
@@ -187,11 +190,12 @@ mod tests {
         assert_eq!(parse_prefix("/3d/config.toml"), Some((3, "config.toml")));
         assert_eq!(parse_prefix("/1d/se/rd/serde"), Some((1, "se/rd/serde")));
         assert_eq!(parse_prefix("/30d/"), Some((30, "")));
+        assert_eq!(parse_prefix("/0d/se/rd/serde"), Some((0, "se/rd/serde")));
+        assert_eq!(parse_prefix("/0d/config.toml"), Some((0, "config.toml")));
     }
 
     #[test]
     fn prefix_rejects() {
-        assert_eq!(parse_prefix("/0d/x"), None);
         assert_eq!(parse_prefix("/31d/x"), None);
         assert_eq!(parse_prefix("/3/x"), None);
         assert_eq!(parse_prefix("/d/x"), None);
